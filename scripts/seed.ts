@@ -12,6 +12,7 @@ import {
   QuestionType,
   TeamMemberRole,
 } from "../app/db/schema";
+import { insertAnalyticsSeed, planAnalyticsSeed } from "./seedAnalytics";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1913,6 +1914,57 @@ You've completed the Building REST APIs course. You now have the skills to build
     `Created 1 team with Bossy McBossface as admin, 1 team purchase, and ${seededCoupons.length} coupons (2 redeemed, 3 available).`
   );
 
+  // ─── Analytics Students ───
+  // ~50 generated students with activity over the last 60 days, so instructor
+  // analytics have shape. Deterministic — see scripts/seedAnalytics.ts.
+
+  function seedQuiz(quiz: typeof quiz1, optionIds: typeof quiz1OptionIds) {
+    const questionIds = [...new Set(optionIds.map((o) => o.questionId))];
+    return {
+      quizId: quiz.id,
+      lessonId: quiz.lessonId,
+      passingScore: quiz.passingScore,
+      questions: questionIds.map((questionId) => {
+        const options = optionIds.filter((o) => o.questionId === questionId);
+        return {
+          questionId,
+          correctOptionId: options.find((o) => o.correct)!.optionId,
+          wrongOptionId: options.find((o) => !o.correct)!.optionId,
+        };
+      }),
+    };
+  }
+
+  const analytics = insertAnalyticsSeed(
+    db,
+    planAnalyticsSeed({
+      now: new Date(),
+      courses: [
+        {
+          courseId: course1.id,
+          instructorId: course1.instructorId,
+          price: course1.price,
+          lessonIds: course1LessonIds,
+          quizzes: [
+            seedQuiz(quiz1, quiz1OptionIds),
+            seedQuiz(quiz2, quiz2OptionIds),
+          ],
+        },
+        {
+          courseId: course2.id,
+          instructorId: course2.instructorId,
+          price: course2.price,
+          lessonIds: course2LessonIds,
+          quizzes: [seedQuiz(quiz3, quiz3OptionIds)],
+        },
+      ],
+    })
+  );
+
+  console.log(
+    `Created ${analytics.students} analytics students: ${analytics.enrollments} enrollments, ${analytics.progress} progress records, ${analytics.quizAttempts} quiz attempts, ${analytics.ratings} ratings, ${analytics.comments} comments, ${analytics.purchases} purchases (${analytics.teams} team, ${analytics.couponsRedeemed} seats redeemed).`
+  );
+
   console.log("\n✓ Seed complete!");
   console.log("  Users: 9 (1 admin, 2 instructors, 6 students)");
   console.log("  Categories: 5");
@@ -1925,6 +1977,9 @@ You've completed the Building REST APIs course. You now have the skills to build
   console.log("  Lesson comments: 15 (4 questions awaiting an answer)");
   console.log("  Purchases: 6 (5 individual + 1 team)");
   console.log("  Teams: 1 (with 5 coupons)");
+  console.log(
+    `  Plus ${analytics.students} generated analytics students (see above)`
+  );
 }
 
 seed().catch(console.error);

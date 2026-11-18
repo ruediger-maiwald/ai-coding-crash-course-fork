@@ -39,6 +39,7 @@ import { getQuizByLessonId, getBestAttempt } from "~/services/quizService";
 import { getCourseAnalytics } from "~/services/analyticsService";
 import { InstructorKpiStrip } from "~/components/instructor-kpi-strip";
 import { CourseDropOffChart } from "~/components/course-drop-off-chart";
+import { CourseStuckPoints } from "~/components/course-stuck-points";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -1681,6 +1682,10 @@ export default function InstructorCourseEditor({
           <CourseDropOffChart
             dropOff={analytics.dropOff}
             enrolled={analytics.kpis.students.allTime}
+          />
+          <CourseStuckPoints
+            quizzes={analytics.quizzes}
+            mostDiscussedLessons={analytics.mostDiscussedLessons}
           />
         </TabsContent>
       </Tabs>

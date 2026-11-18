@@ -4,9 +4,11 @@ import {
   avg,
   count,
   countDistinct,
+  desc,
   eq,
   getTableColumns,
   gte,
+  isNull,
   max,
   sql,
   sum,
@@ -15,6 +17,7 @@ import {
 import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { db } from "~/db";
 import {
+  comments,
   courseRatings,
   courses,
   enrollments,
@@ -23,6 +26,8 @@ import {
   lessons,
   modules,
   purchases,
+  quizAttempts,
+  quizzes,
 } from "~/db/schema";
 
 /** Number of lessons currently in each course that has at least one. */
@@ -144,6 +149,11 @@ function getCompletion(scope: SQL, since: string) {
   };
 }
 
+/** Drizzle returns avg() as a string, or null over no rows. */
+function avgToNumber(value: string | null | undefined) {
+  return value == null ? null : Number(value);
+}
+
 /** Average rating (null when there are none) and number of ratings. */
 function getRating(scope: SQL, since?: string) {
   const row = db
@@ -152,9 +162,8 @@ function getRating(scope: SQL, since?: string) {
     .innerJoin(courses, eq(courses.id, courseRatings.courseId))
     .where(and(scope, inWindow(courseRatings.createdAt, since)))
     .get();
-  // Drizzle returns avg() as a string, or null over no rows.
   return {
-    average: row?.average == null ? null : Number(row.average),
+    average: avgToNumber(row?.average),
     count: row?.count ?? 0,
   };
 }
@@ -240,12 +249,73 @@ function getDropOff(courseId: number, enrolled: number) {
   }));
 }
 
-/** Analytics for a single course: its four KPIs and lesson drop-off. */
+/**
+ * Every quiz in the course, in course order, with its attempt count and, over
+ * all attempts (retakes included), the pass rate and average score (0–1).
+ * Pass rate and average are null for a quiz nobody has attempted.
+ */
+function getQuizStats(courseId: number) {
+  const rows = db
+    .select({
+      quizId: quizzes.id,
+      title: quizzes.title,
+      lessonTitle: lessons.title,
+      attempts: count(quizAttempts.id),
+      passRate: avg(quizAttempts.passed),
+      averageScore: avg(quizAttempts.score),
+    })
+    .from(quizzes)
+    .innerJoin(lessons, eq(lessons.id, quizzes.lessonId))
+    .innerJoin(modules, eq(modules.id, lessons.moduleId))
+    .leftJoin(quizAttempts, eq(quizAttempts.quizId, quizzes.id))
+    .where(eq(modules.courseId, courseId))
+    .groupBy(quizzes.id)
+    .orderBy(asc(modules.position), asc(lessons.position), asc(quizzes.id))
+    .all();
+
+  return rows.map((row) => ({
+    ...row,
+    passRate: avgToNumber(row.passRate),
+    averageScore: avgToNumber(row.averageScore),
+  }));
+}
+
+const MOST_DISCUSSED_LIMIT = 5;
+
+/**
+ * The five lessons in the course with the most comments (replies included,
+ * soft-deleted excluded), most first; ties follow course order. Lessons with
+ * no comments are left out.
+ */
+function getMostDiscussedLessons(courseId: number) {
+  const commentCount = count(comments.id);
+  return db
+    .select({
+      lessonId: lessons.id,
+      title: lessons.title,
+      comments: commentCount,
+    })
+    .from(comments)
+    .innerJoin(lessons, eq(lessons.id, comments.lessonId))
+    .innerJoin(modules, eq(modules.id, lessons.moduleId))
+    .where(and(eq(modules.courseId, courseId), isNull(comments.deletedAt)))
+    .groupBy(lessons.id)
+    .orderBy(desc(commentCount), asc(modules.position), asc(lessons.position))
+    .limit(MOST_DISCUSSED_LIMIT)
+    .all();
+}
+
+/**
+ * Analytics for a single course: its four KPIs, lesson drop-off, quiz stats
+ * and most-discussed lessons.
+ */
 export function getCourseAnalytics(courseId: number) {
   const kpis = getKpis(eq(courses.id, courseId));
   return {
     kpis,
     dropOff: getDropOff(courseId, kpis.students.allTime),
+    quizzes: getQuizStats(courseId),
+    mostDiscussedLessons: getMostDiscussedLessons(courseId),
   };
 }
 

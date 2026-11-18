@@ -67,6 +67,45 @@ function createLessons(moduleId: number, count: number) {
   return ids;
 }
 
+function createLesson(moduleId: number, title: string, position: number) {
+  return testDb
+    .insert(schema.lessons)
+    .values({ moduleId, title, position })
+    .returning()
+    .get();
+}
+
+function createQuiz(lessonId: number, title: string, passingScore: number) {
+  return testDb
+    .insert(schema.quizzes)
+    .values({ lessonId, title, passingScore })
+    .returning()
+    .get();
+}
+
+function attemptQuiz(
+  userId: number,
+  quizId: number,
+  score: number,
+  passed: boolean
+) {
+  testDb
+    .insert(schema.quizAttempts)
+    .values({ userId, quizId, score, passed })
+    .run();
+}
+
+function addComment(
+  lessonId: number,
+  userId: number,
+  deletedAt: string | null = null
+) {
+  testDb
+    .insert(schema.comments)
+    .values({ lessonId, userId, body: "A comment", deletedAt })
+    .run();
+}
+
 function completeLesson(userId: number, lessonId: number, completedAt: string) {
   testDb
     .insert(schema.lessonProgress)
@@ -597,14 +636,6 @@ describe("getCourseAnalytics", () => {
   });
 
   describe("drop-off", () => {
-    function createLesson(moduleId: number, title: string, position: number) {
-      return testDb
-        .insert(schema.lessons)
-        .values({ moduleId, title, position })
-        .returning()
-        .get();
-    }
-
     it("lists lessons by module position, then lesson position", () => {
       // Insert out of order so ids don't match course order.
       const second = createModule(base.course.id, 2);
@@ -620,10 +651,7 @@ describe("getCourseAnalytics", () => {
     });
 
     it("gives each lesson's completed students over all enrolled students", () => {
-      const [l1, l2, l3] = createLessons(
-        createModule(base.course.id, 1).id,
-        3
-      );
+      const [l1, l2, l3] = createLessons(createModule(base.course.id, 1).id, 3);
       const students = ["A", "B", "C", "D"].map((n) =>
         createUser(`Student ${n}`, schema.UserRole.Student)
       );
@@ -659,6 +687,110 @@ describe("getCourseAnalytics", () => {
       expect(getCourseAnalytics(base.course.id).dropOff).toEqual([
         { lessonId: l1, title: "Lesson 1", completed: 0, rate: 0 },
         { lessonId: l2, title: "Lesson 2", completed: 0, rate: 0 },
+      ]);
+    });
+  });
+
+  describe("quizzes", () => {
+    it("gives attempts, pass rate and average score per quiz, in course order", () => {
+      const second = createModule(base.course.id, 2);
+      const first = createModule(base.course.id, 1);
+      const late = createQuiz(
+        createLesson(second.id, "Late lesson", 1).id,
+        "Late quiz",
+        0.7
+      );
+      const early = createQuiz(
+        createLesson(first.id, "Early lesson", 1).id,
+        "Early quiz",
+        0.7
+      );
+      const [a, b] = ["A", "B"].map((n) =>
+        createUser(`Quizzer ${n}`, schema.UserRole.Student)
+      );
+      // Every attempt counts, retakes included.
+      attemptQuiz(a.id, early.id, 0.5, false);
+      attemptQuiz(a.id, early.id, 0.75, true);
+      attemptQuiz(b.id, early.id, 1, true);
+      attemptQuiz(b.id, early.id, 1, true);
+
+      // A quiz in another course doesn't appear.
+      const other = createCourse(base.instructor.id, "other-course");
+      const otherQuiz = createQuiz(
+        createLesson(createModule(other.id, 1).id, "Other lesson", 1).id,
+        "Other quiz",
+        0.7
+      );
+      attemptQuiz(a.id, otherQuiz.id, 0, false);
+
+      expect(getCourseAnalytics(base.course.id).quizzes).toEqual([
+        {
+          quizId: early.id,
+          title: "Early quiz",
+          lessonTitle: "Early lesson",
+          attempts: 4,
+          passRate: 0.75,
+          averageScore: 0.8125,
+        },
+        {
+          quizId: late.id,
+          title: "Late quiz",
+          lessonTitle: "Late lesson",
+          attempts: 0,
+          passRate: null,
+          averageScore: null,
+        },
+      ]);
+    });
+  });
+
+  describe("most-discussed lessons", () => {
+    it("lists the 5 lessons with the most non-deleted comments, most first", () => {
+      const lessonIds = createLessons(createModule(base.course.id, 1).id, 7);
+      // Lesson n (1-based) gets n live comments; lesson 7 gets none.
+      lessonIds.slice(0, 6).forEach((lessonId, i) => {
+        for (let n = 0; n <= i; n++) addComment(lessonId, base.user.id);
+      });
+      // Deleted comments don't count: lesson 1 would otherwise lead.
+      for (let n = 0; n < 10; n++) {
+        addComment(lessonIds[0], base.user.id, daysAgo(1));
+      }
+      // Comments on another course's lessons don't appear.
+      const other = createCourse(base.instructor.id, "other-course");
+      const [otherLesson] = createLessons(createModule(other.id, 1).id, 1);
+      for (let n = 0; n < 20; n++) addComment(otherLesson, base.user.id);
+
+      expect(getCourseAnalytics(base.course.id).mostDiscussedLessons).toEqual([
+        { lessonId: lessonIds[5], title: "Lesson 6", comments: 6 },
+        { lessonId: lessonIds[4], title: "Lesson 5", comments: 5 },
+        { lessonId: lessonIds[3], title: "Lesson 4", comments: 4 },
+        { lessonId: lessonIds[2], title: "Lesson 3", comments: 3 },
+        { lessonId: lessonIds[1], title: "Lesson 2", comments: 2 },
+      ]);
+    });
+
+    it("breaks ties by course order", () => {
+      const second = createModule(base.course.id, 2);
+      const first = createModule(base.course.id, 1);
+      const later = createLesson(second.id, "Later", 1);
+      const earlier = createLesson(first.id, "Earlier", 1);
+      addComment(later.id, base.user.id);
+      addComment(earlier.id, base.user.id);
+
+      expect(
+        getCourseAnalytics(base.course.id).mostDiscussedLessons.map(
+          (l) => l.title
+        )
+      ).toEqual(["Earlier", "Later"]);
+    });
+
+    it("leaves out lessons without comments", () => {
+      const [l1] = createLessons(createModule(base.course.id, 1).id, 3);
+      addComment(l1, base.user.id);
+      addComment(l1, base.user.id, daysAgo(1));
+
+      expect(getCourseAnalytics(base.course.id).mostDiscussedLessons).toEqual([
+        { lessonId: l1, title: "Lesson 1", comments: 1 },
       ]);
     });
   });

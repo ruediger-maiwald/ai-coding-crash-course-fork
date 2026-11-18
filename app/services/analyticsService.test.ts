@@ -596,6 +596,73 @@ describe("getCourseAnalytics", () => {
     });
   });
 
+  describe("drop-off", () => {
+    function createLesson(moduleId: number, title: string, position: number) {
+      return testDb
+        .insert(schema.lessons)
+        .values({ moduleId, title, position })
+        .returning()
+        .get();
+    }
+
+    it("lists lessons by module position, then lesson position", () => {
+      // Insert out of order so ids don't match course order.
+      const second = createModule(base.course.id, 2);
+      const first = createModule(base.course.id, 1);
+      createLesson(second.id, "2.2", 2);
+      createLesson(first.id, "1.2", 2);
+      createLesson(second.id, "2.1", 1);
+      createLesson(first.id, "1.1", 1);
+
+      expect(
+        getCourseAnalytics(base.course.id).dropOff.map((l) => l.title)
+      ).toEqual(["1.1", "1.2", "2.1", "2.2"]);
+    });
+
+    it("gives each lesson's completed students over all enrolled students", () => {
+      const [l1, l2, l3] = createLessons(
+        createModule(base.course.id, 1).id,
+        3
+      );
+      const students = ["A", "B", "C", "D"].map((n) =>
+        createUser(`Student ${n}`, schema.UserRole.Student)
+      );
+      for (const s of students) enroll(s.id, base.course.id, daysAgo(10));
+      const [a, b, c] = students;
+      completeLesson(a.id, l1, daysAgo(9));
+      completeLesson(b.id, l1, daysAgo(9));
+      completeLesson(c.id, l1, daysAgo(9));
+      completeLesson(a.id, l2, daysAgo(8));
+      // In progress doesn't count.
+      testDb
+        .insert(schema.lessonProgress)
+        .values({
+          userId: b.id,
+          lessonId: l2,
+          status: schema.LessonProgressStatus.InProgress,
+        })
+        .run();
+      // A completion by someone not enrolled doesn't count either.
+      const visitor = createUser("Visitor", schema.UserRole.Student);
+      completeLesson(visitor.id, l1, daysAgo(1));
+
+      expect(getCourseAnalytics(base.course.id).dropOff).toEqual([
+        { lessonId: l1, title: "Lesson 1", completed: 3, rate: 0.75 },
+        { lessonId: l2, title: "Lesson 2", completed: 1, rate: 0.25 },
+        { lessonId: l3, title: "Lesson 3", completed: 0, rate: 0 },
+      ]);
+    });
+
+    it("lists every lesson at 0% when nobody is enrolled", () => {
+      const [l1, l2] = createLessons(createModule(base.course.id, 1).id, 2);
+
+      expect(getCourseAnalytics(base.course.id).dropOff).toEqual([
+        { lessonId: l1, title: "Lesson 1", completed: 0, rate: 0 },
+        { lessonId: l2, title: "Lesson 2", completed: 0, rate: 0 },
+      ]);
+    });
+  });
+
   it("returns zeros and nulls for a course with no enrollments or ratings", () => {
     createLessons(createModule(base.course.id, 1).id, 3);
 

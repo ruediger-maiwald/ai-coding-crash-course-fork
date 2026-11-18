@@ -205,9 +205,48 @@ export function getInstructorSummary(instructorId: number) {
   return getKpis(eq(courses.instructorId, instructorId));
 }
 
-/** Analytics for a single course: its four KPIs. */
+/**
+ * For each lesson in course order (module position, then lesson position),
+ * how many enrolled students completed it and what share of all enrolled
+ * students that is (0 when nobody is enrolled). Completions by users who
+ * aren't enrolled are ignored.
+ */
+function getDropOff(courseId: number, enrolled: number) {
+  const rows = db
+    .select({
+      lessonId: lessons.id,
+      title: lessons.title,
+      completed: countDistinct(lessonProgress.userId),
+    })
+    .from(lessons)
+    .innerJoin(modules, eq(modules.id, lessons.moduleId))
+    .leftJoin(enrollments, eq(enrollments.courseId, modules.courseId))
+    .leftJoin(
+      lessonProgress,
+      and(
+        eq(lessonProgress.lessonId, lessons.id),
+        eq(lessonProgress.userId, enrollments.userId),
+        eq(lessonProgress.status, LessonProgressStatus.Completed)
+      )
+    )
+    .where(eq(modules.courseId, courseId))
+    .groupBy(lessons.id)
+    .orderBy(asc(modules.position), asc(lessons.position))
+    .all();
+
+  return rows.map((row) => ({
+    ...row,
+    rate: enrolled === 0 ? 0 : row.completed / enrolled,
+  }));
+}
+
+/** Analytics for a single course: its four KPIs and lesson drop-off. */
 export function getCourseAnalytics(courseId: number) {
-  return { kpis: getKpis(eq(courses.id, courseId)) };
+  const kpis = getKpis(eq(courses.id, courseId));
+  return {
+    kpis,
+    dropOff: getDropOff(courseId, kpis.students.allTime),
+  };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

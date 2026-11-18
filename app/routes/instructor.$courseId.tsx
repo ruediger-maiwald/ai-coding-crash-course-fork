@@ -38,6 +38,7 @@ import { calculateProgress } from "~/services/progressService";
 import { getQuizByLessonId, getBestAttempt } from "~/services/quizService";
 import { getCourseAnalytics } from "~/services/analyticsService";
 import { InstructorKpiStrip } from "~/components/instructor-kpi-strip";
+import { CourseDropOffChart } from "~/components/course-drop-off-chart";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -1677,6 +1678,10 @@ export default function InstructorCourseEditor({
         {/* Analytics Tab */}
         <TabsContent value="analytics" className="mt-6">
           <InstructorKpiStrip summary={analytics.kpis} />
+          <CourseDropOffChart
+            dropOff={analytics.dropOff}
+            enrolled={analytics.kpis.students.allTime}
+          />
         </TabsContent>
       </Tabs>
     </div>

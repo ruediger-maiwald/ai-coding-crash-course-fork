@@ -1,13 +1,32 @@
-import { asc, count, eq, getTableColumns } from "drizzle-orm";
+import {
+  and,
+  asc,
+  avg,
+  count,
+  countDistinct,
+  eq,
+  getTableColumns,
+  gte,
+  max,
+  sum,
+  type SQL,
+} from "drizzle-orm";
+import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { db } from "~/db";
-import { courses, enrollments, lessons, modules } from "~/db/schema";
+import {
+  courseRatings,
+  courses,
+  enrollments,
+  LessonProgressStatus,
+  lessonProgress,
+  lessons,
+  modules,
+  purchases,
+} from "~/db/schema";
 
-/**
- * Every course owned by the instructor (any status), with its lesson and
- * student counts. One grouped query, rather than two count queries per course.
- */
-export function getInstructorCourseStats(instructorId: number) {
-  const lessonCounts = db
+/** Number of lessons currently in each course that has at least one. */
+function lessonCountsByCourse() {
+  return db
     .select({
       courseId: modules.courseId,
       lessonCount: count(lessons.id).as("lesson_count"),
@@ -16,6 +35,14 @@ export function getInstructorCourseStats(instructorId: number) {
     .innerJoin(lessons, eq(lessons.moduleId, modules.id))
     .groupBy(modules.courseId)
     .as("lesson_counts");
+}
+
+/**
+ * Every course owned by the instructor (any status), with its lesson and
+ * student counts. One grouped query, rather than two count queries per course.
+ */
+export function getInstructorCourseStats(instructorId: number) {
+  const lessonCounts = lessonCountsByCourse();
 
   const enrollmentCounts = db
     .select({
@@ -46,4 +73,127 @@ export function getInstructorCourseStats(instructorId: number) {
     lessonCount: row.lessonCount ?? 0,
     enrollmentCount: row.enrollmentCount ?? 0,
   }));
+}
+
+const WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Start of the rolling 30-day window, as a comparable ISO timestamp (UTC). */
+function windowStart() {
+  return new Date(Date.now() - WINDOW_MS).toISOString();
+}
+
+/** `column` falls in the window starting at `since`; no filter when all-time. */
+function inWindow(column: SQLiteColumn, since?: string) {
+  return since ? gte(column, since) : undefined;
+}
+
+function countStudents(scope: SQL, since?: string) {
+  const row = db
+    .select({ count: count() })
+    .from(enrollments)
+    .innerJoin(courses, eq(courses.id, enrollments.courseId))
+    .where(and(scope, inWindow(enrollments.enrolledAt, since)))
+    .get();
+  return row?.count ?? 0;
+}
+
+/**
+ * Completion rate (completed / enrolled) and how many students finished in the
+ * window. A student has completed a course once they have a completed
+ * lesson-progress record for every lesson currently in it; their finish date
+ * is the latest of those completions. enrollments.completedAt is ignored —
+ * nothing in the app sets it.
+ */
+function getCompletion(scope: SQL, since: string) {
+  const lessonCounts = lessonCountsByCourse();
+
+  const perEnrollment = db
+    .select({
+      lessonCount: lessonCounts.lessonCount,
+      completedLessons: countDistinct(lessonProgress.lessonId),
+      finishedAt: max(lessonProgress.completedAt),
+    })
+    .from(enrollments)
+    .innerJoin(courses, eq(courses.id, enrollments.courseId))
+    .leftJoin(lessonCounts, eq(lessonCounts.courseId, enrollments.courseId))
+    .leftJoin(modules, eq(modules.courseId, enrollments.courseId))
+    .leftJoin(lessons, eq(lessons.moduleId, modules.id))
+    .leftJoin(
+      lessonProgress,
+      and(
+        eq(lessonProgress.lessonId, lessons.id),
+        eq(lessonProgress.userId, enrollments.userId),
+        eq(lessonProgress.status, LessonProgressStatus.Completed)
+      )
+    )
+    .where(scope)
+    .groupBy(enrollments.id)
+    .all();
+
+  const finished = perEnrollment.filter(
+    (e) => e.lessonCount !== null && e.completedLessons === e.lessonCount
+  );
+
+  return {
+    rate:
+      perEnrollment.length === 0 ? 0 : finished.length / perEnrollment.length,
+    finishedLast30Days: finished.filter(
+      (e) => e.finishedAt !== null && e.finishedAt >= since
+    ).length,
+  };
+}
+
+/** Average rating (null when there are none) and number of ratings. */
+function getRating(scope: SQL, since?: string) {
+  const row = db
+    .select({ average: avg(courseRatings.rating), count: count() })
+    .from(courseRatings)
+    .innerJoin(courses, eq(courses.id, courseRatings.courseId))
+    .where(and(scope, inWindow(courseRatings.createdAt, since)))
+    .get();
+  // Drizzle returns avg() as a string, or null over no rows.
+  return {
+    average: row?.average == null ? null : Number(row.average),
+    count: row?.count ?? 0,
+  };
+}
+
+/**
+ * Revenue in cents: what was actually paid. PPP purchases store the discounted
+ * amount, and a team purchase is a single row, so a plain sum is correct.
+ */
+function sumRevenue(scope: SQL, since?: string) {
+  const row = db
+    .select({ total: sum(purchases.amountPaid) })
+    .from(purchases)
+    .innerJoin(courses, eq(courses.id, purchases.courseId))
+    .where(and(scope, inWindow(purchases.createdAt, since)))
+    .get();
+  // Drizzle returns sum() as a string, or null over no rows.
+  return row?.total == null ? 0 : Number(row.total);
+}
+
+/**
+ * The four headline KPIs across every course the instructor owns (any status),
+ * each all-time and for the last 30 days.
+ */
+export function getInstructorSummary(instructorId: number) {
+  const scope = eq(courses.instructorId, instructorId);
+  const since = windowStart();
+
+  return {
+    students: {
+      allTime: countStudents(scope),
+      last30Days: countStudents(scope, since),
+    },
+    completion: getCompletion(scope, since),
+    rating: {
+      allTime: getRating(scope),
+      last30Days: getRating(scope, since),
+    },
+    revenue: {
+      allTime: sumRevenue(scope),
+      last30Days: sumRevenue(scope, since),
+    },
+  };
 }

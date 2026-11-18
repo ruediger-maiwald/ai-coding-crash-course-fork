@@ -12,6 +12,7 @@ vi.mock("~/db", () => ({
 }));
 
 import {
+  getDailyEnrollments,
   getInstructorCourseStats,
   getInstructorSummary,
 } from "./analyticsService";
@@ -462,5 +463,78 @@ describe("getInstructorSummary", () => {
       },
       revenue: { allTime: 4999, last30Days: 4999 },
     });
+  });
+});
+
+describe("getDailyEnrollments", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function student(n: number) {
+    return createUser(`Daily Student ${n}`, schema.UserRole.Student);
+  }
+
+  it("returns exactly 30 zero-filled UTC days ending today", () => {
+    const days = getDailyEnrollments(base.instructor.id);
+
+    expect(days).toHaveLength(30);
+    expect(days[0]).toEqual({ date: "2026-05-17", count: 0 });
+    expect(days[29]).toEqual({ date: "2026-06-15", count: 0 });
+    expect(days.every((d) => d.count === 0)).toBe(true);
+    // Consecutive days, no gaps.
+    for (let i = 1; i < days.length; i++) {
+      expect(Date.parse(days[i].date) - Date.parse(days[i - 1].date)).toBe(
+        DAY_MS
+      );
+    }
+  });
+
+  it("buckets enrollments by UTC day across all of the instructor's courses", () => {
+    const course2 = createCourse(base.instructor.id, "second-course");
+    // Both ends of the same UTC day land in one bucket.
+    enroll(student(1).id, base.course.id, "2026-06-10T00:00:00.000Z");
+    enroll(student(2).id, course2.id, "2026-06-10T23:59:59.999Z");
+    enroll(student(3).id, base.course.id, "2026-06-11T00:00:00.000Z");
+    // Earlier today, before "now".
+    enroll(student(4).id, course2.id, "2026-06-15T01:00:00.000Z");
+
+    const counts = Object.fromEntries(
+      getDailyEnrollments(base.instructor.id).map((d) => [d.date, d.count])
+    );
+
+    expect(counts["2026-06-09"]).toBe(0);
+    expect(counts["2026-06-10"]).toBe(2);
+    expect(counts["2026-06-11"]).toBe(1);
+    expect(counts["2026-06-12"]).toBe(0);
+    expect(counts["2026-06-15"]).toBe(1);
+  });
+
+  it("includes the whole first UTC day and nothing before it", () => {
+    enroll(student(1).id, base.course.id, "2026-05-17T00:00:00.000Z");
+    enroll(student(2).id, base.course.id, "2026-05-16T23:59:59.999Z");
+
+    const days = getDailyEnrollments(base.instructor.id);
+
+    expect(days[0]).toEqual({ date: "2026-05-17", count: 1 });
+    expect(days.reduce((sum, d) => sum + d.count, 0)).toBe(1);
+  });
+
+  it("excludes other instructors' enrollments", () => {
+    const other = createUser("Other Instructor", schema.UserRole.Instructor);
+    const otherCourse = createCourse(other.id, "other-course");
+    enroll(student(1).id, otherCourse.id, daysAgo(1));
+    enroll(student(2).id, base.course.id, daysAgo(1));
+
+    const total = (instructorId: number) =>
+      getDailyEnrollments(instructorId).reduce((sum, d) => sum + d.count, 0);
+
+    expect(total(base.instructor.id)).toBe(1);
+    expect(total(other.id)).toBe(1);
   });
 });

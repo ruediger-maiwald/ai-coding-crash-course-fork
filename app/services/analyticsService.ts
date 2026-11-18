@@ -8,6 +8,7 @@ import {
   getTableColumns,
   gte,
   max,
+  sql,
   sum,
   type SQL,
 } from "drizzle-orm";
@@ -196,4 +197,43 @@ export function getInstructorSummary(instructorId: number) {
       last30Days: sumRevenue(scope, since),
     },
   };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAILY_ENROLLMENT_DAYS = 30;
+
+/** The UTC calendar day of `date`, as "YYYY-MM-DD". */
+function utcDay(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * New enrollments per UTC day across every course the instructor owns: exactly
+ * 30 calendar days ending today (UTC), oldest first, with days without
+ * enrollments as 0. Unlike the rolling KPI window, the first day is whole.
+ */
+export function getDailyEnrollments(instructorId: number) {
+  const today = Date.parse(utcDay(new Date()));
+  const dates = Array.from({ length: DAILY_ENROLLMENT_DAYS }, (_, i) =>
+    utcDay(new Date(today - (DAILY_ENROLLMENT_DAYS - 1 - i) * DAY_MS))
+  );
+
+  // enrolledAt is stored via toISOString() (UTC), so its first 10 chars are
+  // the same "YYYY-MM-DD" day as utcDay().
+  const day = sql<string>`substr(${enrollments.enrolledAt}, 1, 10)`;
+  const rows = db
+    .select({ date: day, count: count() })
+    .from(enrollments)
+    .innerJoin(courses, eq(courses.id, enrollments.courseId))
+    .where(
+      and(
+        eq(courses.instructorId, instructorId),
+        gte(enrollments.enrolledAt, dates[0])
+      )
+    )
+    .groupBy(day)
+    .all();
+
+  const counts = new Map(rows.map((r) => [r.date, r.count]));
+  return dates.map((date) => ({ date, count: counts.get(date) ?? 0 }));
 }

@@ -1,9 +1,11 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/instructor";
 import {
+  getDailyEnrollments,
   getInstructorCourseStats,
   getInstructorSummary,
 } from "~/services/analyticsService";
+import { InstructorEnrollmentChart } from "~/components/instructor-enrollment-chart";
 import { InstructorKpiStrip } from "~/components/instructor-kpi-strip";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
@@ -57,6 +59,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   return {
     courses: coursesWithStats,
     summary: getInstructorSummary(currentUserId),
+    dailyEnrollments: getDailyEnrollments(currentUserId),
   };
 }
 
@@ -100,6 +103,7 @@ export function HydrateFallback() {
           <Skeleton key={i} className="h-28 rounded-xl" />
         ))}
       </div>
+      <Skeleton className="mb-8 h-80 rounded-xl" />
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 3 }).map((_, i) => (
           <Card key={i} className="flex flex-col">
@@ -127,7 +131,7 @@ export function HydrateFallback() {
 export default function InstructorDashboard({
   loaderData,
 }: Route.ComponentProps) {
-  const { courses, summary } = loaderData;
+  const { courses, summary, dailyEnrollments } = loaderData;
 
   return (
     <div className="mx-auto max-w-7xl p-6 lg:p-8">
@@ -156,6 +160,7 @@ export default function InstructorDashboard({
       </div>
 
       <InstructorKpiStrip summary={summary} />
+      <InstructorEnrollmentChart days={dailyEnrollments} />
 
       {courses.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">

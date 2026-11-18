@@ -12,6 +12,7 @@ vi.mock("~/db", () => ({
 }));
 
 import {
+  getCourseAnalytics,
   getDailyEnrollments,
   getInstructorCourseStats,
   getInstructorSummary,
@@ -536,5 +537,76 @@ describe("getDailyEnrollments", () => {
 
     expect(total(base.instructor.id)).toBe(1);
     expect(total(other.id)).toBe(1);
+  });
+});
+
+describe("getCourseAnalytics", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("scopes the four KPIs to that course alone", () => {
+    // Two courses by the same instructor, each with activity.
+    const [a1, a2] = createLessons(createModule(base.course.id, 1).id, 2);
+    const course2 = createCourse(base.instructor.id, "second-course");
+    const [b1] = createLessons(createModule(course2.id, 1).id, 1);
+    const [alice, bob] = ["Alice", "Bob"].map((n) =>
+      createUser(n, schema.UserRole.Student)
+    );
+
+    // Course 1: Alice finished 3 days ago, Bob is partway and enrolled long ago.
+    enroll(alice.id, base.course.id, daysAgo(10));
+    enroll(bob.id, base.course.id, daysAgo(40));
+    completeLesson(alice.id, a1, daysAgo(8));
+    completeLesson(alice.id, a2, daysAgo(3));
+    completeLesson(bob.id, a1, daysAgo(35));
+    rate(alice.id, base.course.id, 5, daysAgo(2));
+    rate(bob.id, base.course.id, 2, daysAgo(35));
+    createPurchase(alice.id, base.course.id, 2500, daysAgo(10));
+    createPurchase(bob.id, base.course.id, 4999, daysAgo(40));
+
+    // Course 2: activity that must not leak into course 1.
+    enroll(alice.id, course2.id, daysAgo(1));
+    completeLesson(alice.id, b1, daysAgo(1));
+    rate(alice.id, course2.id, 1, daysAgo(1));
+    createPurchase(alice.id, course2.id, 9999, daysAgo(1));
+
+    expect(getCourseAnalytics(base.course.id).kpis).toEqual({
+      students: { allTime: 2, last30Days: 1 },
+      completion: { rate: 0.5, finishedLast30Days: 1 },
+      rating: {
+        allTime: { average: 3.5, count: 2 },
+        last30Days: { average: 5, count: 1 },
+      },
+      revenue: { allTime: 7499, last30Days: 2500 },
+    });
+    expect(getCourseAnalytics(course2.id).kpis).toEqual({
+      students: { allTime: 1, last30Days: 1 },
+      completion: { rate: 1, finishedLast30Days: 1 },
+      rating: {
+        allTime: { average: 1, count: 1 },
+        last30Days: { average: 1, count: 1 },
+      },
+      revenue: { allTime: 9999, last30Days: 9999 },
+    });
+  });
+
+  it("returns zeros and nulls for a course with no enrollments or ratings", () => {
+    createLessons(createModule(base.course.id, 1).id, 3);
+
+    expect(getCourseAnalytics(base.course.id).kpis).toEqual({
+      students: { allTime: 0, last30Days: 0 },
+      completion: { rate: 0, finishedLast30Days: 0 },
+      rating: {
+        allTime: { average: null, count: 0 },
+        last30Days: { average: null, count: 0 },
+      },
+      revenue: { allTime: 0, last30Days: 0 },
+    });
   });
 });

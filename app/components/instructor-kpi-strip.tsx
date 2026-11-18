@@ -1,9 +1,7 @@
 import type { ReactNode } from "react";
 import { CheckCircle2, DollarSign, Star, Users } from "lucide-react";
 import { Card, CardContent } from "~/components/ui/card";
-import type { getInstructorSummary } from "~/services/analyticsService";
-
-type InstructorSummary = ReturnType<typeof getInstructorSummary>;
+import type { KpiSummary } from "~/services/analyticsService";
 
 /** Cents → "$1,234" or "$1,234.56". Zero shows as "$0", never "Free". */
 function formatUsd(cents: number) {
@@ -46,7 +44,7 @@ function KpiCard({
 export function InstructorKpiStrip({
   summary,
 }: {
-  summary: InstructorSummary;
+  summary: KpiSummary;
 }) {
   const { students, completion, rating, revenue } = summary;
   const iconClass = "size-4";

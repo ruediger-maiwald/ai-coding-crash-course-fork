@@ -175,11 +175,10 @@ function sumRevenue(scope: SQL, since?: string) {
 }
 
 /**
- * The four headline KPIs across every course the instructor owns (any status),
- * each all-time and for the last 30 days.
+ * The four headline KPIs (Students, Completion, Rating, Revenue), each
+ * all-time and for the last 30 days, over the courses matched by `scope`.
  */
-export function getInstructorSummary(instructorId: number) {
-  const scope = eq(courses.instructorId, instructorId);
+function getKpis(scope: SQL) {
   const since = windowStart();
 
   return {
@@ -197,6 +196,18 @@ export function getInstructorSummary(instructorId: number) {
       last30Days: sumRevenue(scope, since),
     },
   };
+}
+
+export type KpiSummary = ReturnType<typeof getKpis>;
+
+/** The four KPIs across every course the instructor owns (any status). */
+export function getInstructorSummary(instructorId: number) {
+  return getKpis(eq(courses.instructorId, instructorId));
+}
+
+/** Analytics for a single course: its four KPIs. */
+export function getCourseAnalytics(courseId: number) {
+  return { kpis: getKpis(eq(courses.id, courseId)) };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

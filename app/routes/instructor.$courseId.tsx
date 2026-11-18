@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Link, useFetcher } from "react-router";
+import { Link, useFetcher, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import {
   DragDropContext,
@@ -36,6 +36,8 @@ import {
 import { getEnrollmentCountForCourse, getCourseEnrolledStudents } from "~/services/enrollmentService";
 import { calculateProgress } from "~/services/progressService";
 import { getQuizByLessonId, getBestAttempt } from "~/services/quizService";
+import { getCourseAnalytics } from "~/services/analyticsService";
+import { InstructorKpiStrip } from "~/components/instructor-kpi-strip";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -54,6 +56,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import {
   ArrowLeft,
+  BarChart3,
   BookOpen,
   Clock,
   Eye,
@@ -185,7 +188,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const quizCount = lessonQuizzes.length;
 
-  return { course, lessonCount, enrollmentCount, students, quizCount };
+  const analytics = getCourseAnalytics(courseId);
+
+  return { course, lessonCount, enrollmentCount, students, quizCount, analytics };
 }
 
 export async function action({ params, request }: Route.ActionArgs) {
@@ -984,7 +989,8 @@ function statusBadgeColor(status: string) {
 export default function InstructorCourseEditor({
   loaderData,
 }: Route.ComponentProps) {
-  const { course, lessonCount, enrollmentCount, students, quizCount } = loaderData;
+  const { course, lessonCount, enrollmentCount, students, quizCount, analytics } = loaderData;
+  const [searchParams] = useSearchParams();
   const statusFetcher = useFetcher();
   const reorderFetcher = useFetcher();
   const lessonReorderFetcher = useFetcher();
@@ -1176,7 +1182,7 @@ export default function InstructorCourseEditor({
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="content">
+      <Tabs defaultValue={searchParams.get("tab") === "analytics" ? "analytics" : "content"}>
         <TabsList>
           <TabsTrigger value="content">
             <BookOpen className="size-4" />
@@ -1193,6 +1199,10 @@ export default function InstructorCourseEditor({
           <TabsTrigger value="students">
             <Users className="size-4" />
             Students
+          </TabsTrigger>
+          <TabsTrigger value="analytics">
+            <BarChart3 className="size-4" />
+            Analytics
           </TabsTrigger>
         </TabsList>
 
@@ -1662,6 +1672,11 @@ export default function InstructorCourseEditor({
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        {/* Analytics Tab */}
+        <TabsContent value="analytics" className="mt-6">
+          <InstructorKpiStrip summary={analytics.kpis} />
         </TabsContent>
       </Tabs>
     </div>

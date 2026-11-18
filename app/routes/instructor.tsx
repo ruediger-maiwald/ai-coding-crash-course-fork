@@ -1,7 +1,6 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/instructor";
-import { getCoursesByInstructor, getLessonCountForCourse } from "~/services/courseService";
-import { getEnrollmentCountForCourse } from "~/services/enrollmentService";
+import { getInstructorCourseStats } from "~/services/analyticsService";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
@@ -36,25 +35,20 @@ export async function loader({ request }: Route.LoaderArgs) {
     });
   }
 
-  const instructorCourses = getCoursesByInstructor(currentUserId);
-
-  const coursesWithStats = instructorCourses.map((course) => {
-    const lessonCount = getLessonCountForCourse(course.id);
-    const enrollmentCount = getEnrollmentCountForCourse(course.id);
-
-    return {
+  const coursesWithStats = getInstructorCourseStats(currentUserId).map(
+    (course) => ({
       id: course.id,
       title: course.title,
       slug: course.slug,
       description: course.description,
       status: course.status,
       coverImageUrl: course.coverImageUrl,
-      lessonCount,
-      enrollmentCount,
+      lessonCount: course.lessonCount,
+      enrollmentCount: course.enrollmentCount,
       createdAt: course.createdAt,
       updatedAt: course.updatedAt,
-    };
-  });
+    })
+  );
 
   return { courses: coursesWithStats };
 }
